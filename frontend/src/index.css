@@ -1,0 +1,12 @@
+body {
+  margin: 0;
+  background: #0d1112;
+  font-family: 'Space Grotesk', 'Trebuchet MS', sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100svh;
+}

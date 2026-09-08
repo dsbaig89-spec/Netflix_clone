@@ -1,0 +1,117 @@
+.landing-page {
+  min-height: 100svh;
+  overflow: hidden;
+  position: relative;
+  background: radial-gradient(circle at 78% 36%, rgba(217, 101, 66, 0.2), transparent 28%), linear-gradient(135deg, #111a1d 0%, #0d1112 56%, #1e1614 100%);
+  color: #e8e2d8;
+}
+
+.landing-page::after {
+  content: '';
+  position: absolute;
+  inset: 16% -12% 9% 62%;
+  border: 1px solid rgba(229, 192, 153, 0.16);
+  border-radius: 50%;
+  transform: rotate(-22deg);
+  pointer-events: none;
+}
+
+.topbar,
+.hero-content,
+.signal-strip {
+  position: relative;
+  z-index: 1;
+  width: min(1120px, calc(100% - 64px));
+  margin-inline: auto;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 34px;
+}
+
+.wordmark {
+  color: #f2e9de;
+  font: 700 1.15rem/1 'Space Grotesk', sans-serif;
+  letter-spacing: 0.18em;
+  text-decoration: none;
+}
+
+.wordmark span { color: #e57a53; }
+
+.status-link {
+  color: #b9b5aa;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-decoration: none;
+}
+
+.status-link span { color: #e57a53; margin-left: 7px; }
+
+.hero-content {
+  padding: clamp(110px, 19vh, 210px) 0 150px;
+}
+
+.eyebrow {
+  color: #e57a53;
+  font: 600 0.72rem/1 'Space Grotesk', sans-serif;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+h1 {
+  color: #f2e9de;
+  font: 500 clamp(3.5rem, 8vw, 7.8rem)/0.93 'DM Serif Display', Georgia, serif;
+  letter-spacing: -0.045em;
+  margin: 28px 0;
+  max-width: 780px;
+}
+
+h1 em { color: #e57a53; font-style: italic; }
+
+.description {
+  color: #aaa9a1;
+  font-size: 1rem;
+  line-height: 1.7;
+  max-width: 450px;
+}
+
+.primary-button {
+  align-items: center;
+  background: #e57a53;
+  color: #171515;
+  display: inline-flex;
+  font: 700 0.75rem/1 'Space Grotesk', sans-serif;
+  gap: 28px;
+  letter-spacing: 0.08em;
+  margin-top: 36px;
+  padding: 17px 20px;
+  text-decoration: none;
+  text-transform: uppercase;
+  transition: background 180ms ease, transform 180ms ease;
+}
+
+.primary-button:hover { background: #f29a70; transform: translateY(-3px); }
+.primary-button span { font-size: 1.1rem; }
+
+.signal-strip {
+  border-top: 1px solid rgba(232, 226, 216, 0.18);
+  display: flex;
+  justify-content: space-between;
+  padding: 20px 0 26px;
+  color: #8c918c;
+  font: 0.7rem/1 'Space Grotesk', sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 640px) {
+  .topbar, .hero-content, .signal-strip { width: min(100% - 40px, 1120px); }
+  .topbar { padding-top: 24px; }
+  .status-link { font-size: 0; }
+  .status-link span { font-size: 1rem; }
+  .hero-content { padding: 130px 0 130px; }
+  .signal-strip { flex-direction: column; gap: 13px; }
+}
