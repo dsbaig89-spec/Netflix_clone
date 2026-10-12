@@ -71,9 +71,26 @@ Copy the values from `.env.example` into your local environment as appropriate:
 - `DB_USERNAME`
 - `DB_PASSWORD`
 - `JWT_SECRET` (reserved for a later authentication phase)
-- `TMDB_API_KEY` (reserved for a later integration phase)
+- `TMDB_API_KEY` or `TMDB_ACCESS_TOKEN` (optional; used by the backend to enrich movie details and find YouTube trailers)
 
 No real credentials belong in `.env.example`, source code, or documentation.
+
+TMDB is optional during development. With neither backend credential configured, TMDB enrichment is disabled and the movie API uses its stored catalogue data. Credentials are read only by Spring Boot; never add them to frontend environment variables.
+
+### Local Movie Posters
+
+Place a verified JPEG poster at `frontend/public/images/posters/<movie-id>.jpg`, using the movie's `id` from the existing `/api/movies` response as the filename. For example, movie ID `21` uses `frontend/public/images/posters/21.jpg`. The UI tries this ID-specific local file first, then the movie's existing API poster URL, and uses the existing placeholder only if neither image can be loaded. This avoids title collisions and does not change the catalogue or database.
+
+To enable current ratings, runtimes, credits, genres, language, and movie trailers, configure either a TMDB API key or a TMDB API Read Access Token in the backend process environment before starting Spring Boot. A v3 API key is sent as the `api_key` query parameter; a v4 read token is sent in the Authorization header. For example, in PowerShell:
+
+```powershell
+$env:TMDB_API_KEY = "your-tmdb-api-key"
+# Alternatively, use a TMDB API Read Access Token:
+# $env:TMDB_ACCESS_TOKEN = "your-tmdb-read-access-token"
+.\gradlew.bat bootRun
+```
+
+Run that command from the `backend` folder. The credential is read only by Spring Boot and is never sent to the React application. When neither credential is set, the API returns available database values and leaves genuinely missing metadata or trailers empty; TMDB failures and rate limits also fall back to stored data. Movie lookup verifies the title and release year before requesting details and videos for the matched TMDB movie ID.
 
 ## Phase 1 Functionality
 
@@ -86,6 +103,20 @@ Phase 1 provides:
 - Backend context and health endpoint tests.
 
 Authentication, movie data, NLP, deep learning, recommendations, user interactions, and admin features are planned for later phases and are not implemented yet.
+
+## Phase 2 Movie API
+
+Phase 2 adds MySQL-backed movie metadata with genres, cast members, directors, explicit join tables, DTO responses, pagination, and development seed data. The available read endpoints are:
+
+- `GET /api/movies`
+- `GET /api/movies/{id}`
+- `GET /api/movies/search?query=space`
+- `GET /api/movies/genre/Sci-Fi`
+- `GET /api/movies/trending`
+- `GET /api/movies/popular`
+- `GET /api/movies/top-rated`
+
+Pagination accepts `page` and `size`; list endpoints also accept an allowlisted sort such as `sort=rating,desc`. Trending currently ranks featured movies before rating and release date. Popular currently uses rating and release date because watch-event popularity data does not exist yet. These are deterministic metadata-based definitions, not user-behavior metrics.
 
 ## Testing
 
