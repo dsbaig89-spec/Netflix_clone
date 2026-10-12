@@ -8,7 +8,7 @@ const toArray = (value) => {
   return value ? [value] : []
 }
 
-const apiBaseUrl = () => import.meta.env.VITE_API_BASE_URL || API_BASE_URL
+const apiBaseUrl = () => import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? '' : API_BASE_URL)
 
 const imageUrl = (value, baseUrl, pathBase = 'tmdb') => {
   if (typeof value !== 'string' || !value.trim()) return null

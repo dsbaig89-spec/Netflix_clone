@@ -31,7 +31,14 @@ function ChevronIcon() {
   )
 }
 
-export default function Navbar({ currentView, onNavigate, onOpenSearch, onToggleProfile }) {
+export default function Navbar({ currentView, onNavigate, onOpenSearch, onToggleProfile, user }) {
+  const initials = (user?.fullName || 'StreamFlix')
+    .split(/\s+/)
+    .map((part) => part[0])
+    .slice(0, 2)
+    .join('')
+    .toUpperCase()
+
   return (
     <header className="topbar">
       <div className="topbar__inner">
@@ -64,7 +71,7 @@ export default function Navbar({ currentView, onNavigate, onOpenSearch, onToggle
 
           <div className="profile-menu-trigger">
             <button type="button" className="profile-button" aria-label="Open profile menu" onClick={onToggleProfile}>
-              <span className="profile-avatar">SF</span>
+              <span className="profile-avatar">{initials}</span>
               <ChevronIcon />
             </button>
           </div>
