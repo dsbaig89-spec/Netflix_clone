@@ -8,6 +8,8 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+import com.netflixai.backend.service.OmdbApiException;
+
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
@@ -26,5 +28,11 @@ public class GlobalExceptionHandler {
                 : exception.getMessage();
         return ResponseEntity.badRequest()
                 .body(new ApiErrorResponse(400, "INVALID_REQUEST", message));
+    }
+
+    @ExceptionHandler(OmdbApiException.class)
+    public ResponseEntity<ApiErrorResponse> handleOmdbApiError(OmdbApiException exception) {
+        return ResponseEntity.status(exception.status())
+                .body(new ApiErrorResponse(exception.status().value(), exception.code(), exception.getMessage()));
     }
 }

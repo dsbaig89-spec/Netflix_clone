@@ -10,26 +10,18 @@ const toArray = (value) => {
 
 const apiBaseUrl = () => import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? '' : API_BASE_URL)
 
-const imageUrl = (value, baseUrl, pathBase = 'tmdb') => {
+const imageUrl = (value, baseUrl) => {
   if (typeof value !== 'string' || !value.trim()) return null
   const url = value.trim()
   if (/^https?:\/\//i.test(url)) return url
   if (url.startsWith('//')) return `https:${url}`
-  if (url.startsWith('/')) {
-    return pathBase === 'api'
-      ? `${baseUrl}${url}`
-      : `https://image.tmdb.org/t/p/w500${url}`
-  }
+  if (url.startsWith('/')) return `${baseUrl}${url}`
   return url
 }
 
-const movieImageUrl = (movie, baseUrl, urlFields, pathFields) => {
+const movieImageUrl = (movie, baseUrl, urlFields) => {
   for (const field of urlFields) {
-    const url = imageUrl(movie[field], baseUrl, 'api')
-    if (url) return url
-  }
-  for (const field of pathFields) {
-    const url = imageUrl(movie[field], baseUrl, 'tmdb')
+    const url = imageUrl(movie[field], baseUrl)
     if (url) return url
   }
   return null
@@ -52,7 +44,8 @@ const normalizeMovie = (movie) => {
   return {
     id: movie.id,
     title: movie.title || 'Untitled Movie',
-    overview: movie.overview || movie.description || '',
+    overview: movie.overview || movie.plot || movie.description || '',
+    omdbImdbId: movie.imdbId || movie.imdbID || null,
     releaseDate,
     releaseYear,
     runtime: movie.runtime ?? null,
@@ -62,14 +55,12 @@ const normalizeMovie = (movie) => {
     posterUrl: movieImageUrl(
       movie,
       apiBaseUrl(),
-      ['posterUrl', 'poster_url', 'imageUrl', 'image_url', 'poster'],
-      ['posterPath', 'poster_path']
+      ['posterUrl', 'poster_url', 'imageUrl', 'image_url', 'poster']
     ),
     backdropUrl: movieImageUrl(
       movie,
       apiBaseUrl(),
-      ['backdropUrl', 'backdrop_url', 'backdrop'],
-      ['backdropPath', 'backdrop_path']
+      ['backdropUrl', 'backdrop_url', 'backdrop']
     ) || FALLBACK_BACKDROP,
     trailerUrl: typeof movie.trailerUrl === 'string' && movie.trailerUrl.trim() ? movie.trailerUrl.trim() : typeof movie.trailer_url === 'string' && movie.trailer_url.trim() ? movie.trailer_url.trim() : typeof movie.videoUrl === 'string' && movie.videoUrl.trim() ? movie.videoUrl.trim() : typeof movie.video_url === 'string' && movie.video_url.trim() ? movie.video_url.trim() : '',
     youtubeId: getYouTubeVideoId(movie.youtubeId || movie.youtube_id || movie.trailerUrl || movie.trailer_url || movie.videoUrl || movie.video_url),
@@ -144,34 +135,84 @@ export async function searchMovies(query, { signal } = {}) {
     return { fallback: false, results: [] }
   }
 
-  try {
+  const localSearch = async () => {
     const response = await fetch(`${baseUrl}/api/movies/search?query=${encodeURIComponent(cleanedQuery)}&page=0&size=12`, { signal })
-    if (!response.ok) {
-      throw new Error('Search failed')
-    }
-
-    const payload = await response.json()
-    const results = extractMovies(payload)
-
-    return { fallback: false, results }
-  } catch (error) {
-    if (error.name === 'AbortError') throw error
-    throw new Error('Search is unavailable because the movie backend could not be reached.')
+    if (!response.ok) throw new Error(`Catalogue search failed with HTTP ${response.status}.`)
+    return extractMovies(await response.json())
   }
+
+  const omdbSearch = async () => {
+    const response = await fetch(`${baseUrl}/api/movies/omdb/search?query=${encodeURIComponent(cleanedQuery)}&page=1`, { signal })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      throw new Error(payload?.message || `OMDb search failed with HTTP ${response.status}.`)
+    }
+    const payload = await response.json()
+    return (Array.isArray(payload.results) ? payload.results : []).map((movie) => normalizeMovie({
+      ...movie,
+      id: movie.imdbId,
+      overview: movie.plot,
+      detailsLoaded: false,
+    }))
+  }
+
+  const [localResult, omdbResult] = await Promise.allSettled([localSearch(), omdbSearch()])
+  if (signal?.aborted) {
+    const abortError = new Error('The operation was aborted.')
+    abortError.name = 'AbortError'
+    throw abortError
+  }
+  const localMovies = localResult.status === 'fulfilled' ? localResult.value : []
+  const omdbMovies = omdbResult.status === 'fulfilled' ? omdbResult.value : []
+  if (localResult.status === 'rejected' && omdbResult.status === 'rejected') {
+    throw new Error(omdbResult.reason?.message || localResult.reason?.message || 'Movie search is unavailable.')
+  }
+
+  const results = []
+  const seen = new Set()
+  for (const movie of [...localMovies, ...omdbMovies]) {
+    const key = `${movie.title.trim().toLowerCase()}|${movie.releaseYear || ''}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      results.push(movie)
+    }
+  }
+
+  const notices = []
+  if (omdbResult.status === 'rejected') notices.push('OMDb search is unavailable; showing catalogue matches only.')
+  if (localResult.status === 'rejected') notices.push('The StreamFlix catalogue search is unavailable.')
+  return { fallback: false, results, notice: notices.join(' ') }
 }
 
-export async function getMovieById(movieId, { signal } = {}) {
+export async function getMovieById(movieId, { signal, imdbId } = {}) {
   const baseUrl = apiBaseUrl()
 
   try {
-    const response = await fetch(`${baseUrl}/api/movies/${movieId}`, { signal })
+    const path = imdbId
+      ? `/api/movies/omdb/${encodeURIComponent(imdbId)}`
+      : `/api/movies/${movieId}`
+    const response = await fetch(`${baseUrl}${path}`, { signal })
     if (!response.ok) {
-      throw new Error('Failed to fetch movie details')
+      const payload = await response.json().catch(() => null)
+      throw new Error(payload?.message || `Failed to fetch movie details (HTTP ${response.status}).`)
     }
 
-    return normalizeMovie(await response.json())
+    const payload = await response.json()
+    return normalizeMovie(imdbId
+      ? { ...payload, overview: payload.plot, cast: [], directors: [], detailsLoaded: true }
+      : payload)
   } catch (error) {
     if (error.name === 'AbortError') throw error
     return null
   }
+}
+
+export async function getMovieTrailer(movieId, { signal } = {}) {
+  const baseUrl = apiBaseUrl()
+  const response = await fetch(`${baseUrl}/api/movies/${encodeURIComponent(movieId)}/trailer`, { signal })
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    throw new Error(payload?.message || `Trailer lookup failed with HTTP ${response.status}.`)
+  }
+  return response.json()
 }

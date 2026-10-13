@@ -2,6 +2,7 @@ package com.netflixai.backend.service;
 
 import java.math.BigDecimal;
 import java.net.URI;
+import java.text.Normalizer;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -9,11 +10,13 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
+import java.util.stream.StreamSupport;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
@@ -21,71 +24,80 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.util.UriComponentsBuilder;
 
-import tools.jackson.databind.JsonNode;
 import com.netflixai.backend.dto.MovieResponse;
 import com.netflixai.backend.entity.Movie;
+
+import tools.jackson.databind.JsonNode;
 
 @Service
 public class TmdbMovieMetadataService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(TmdbMovieMetadataService.class);
-    private static final Pattern YOUTUBE_ID = Pattern.compile("^[\\w-]{11}$");
-    private static final Duration CACHE_DURATION = Duration.ofHours(6);
-    private static final Duration FAILURE_CACHE_DURATION = Duration.ofMinutes(1);
-    private static final TmdbMovieMetadata NO_METADATA = new TmdbMovieMetadata(null, null, null,
-            List.of(), List.of(), List.of(), null, null);
+    private static final Pattern YOUTUBE_ID = Pattern.compile("^[A-Za-z0-9_-]{11}$");
+    private static final Pattern POSTER_PATH = Pattern.compile("^/[A-Za-z0-9_./-]+\\.(jpg|jpeg|png|webp)$");
+    private static final Duration SUCCESS_CACHE_DURATION = Duration.ofHours(6);
+    private static final Duration FAILURE_CACHE_DURATION = Duration.ofMinutes(5);
+    private static final String IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w500";
 
     private final RestClient restClient;
     private final String apiKey;
     private final String accessToken;
     private final String baseUrl;
-    private final ConcurrentMap<String, CachedMetadata> cache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<LookupKey, CachedMetadata> cache = new ConcurrentHashMap<>();
+    private final AtomicReference<Instant> unavailableUntil = new AtomicReference<>(Instant.EPOCH);
 
-    public TmdbMovieMetadataService(RestClient.Builder restClientBuilder,
-                                    @Value("${tmdb.api-key:}") String apiKey,
-                                    @Value("${tmdb.access-token:}") String accessToken,
-                                    @Value("${tmdb.base-url:https://api.themoviedb.org/3}") String baseUrl) {
+    public TmdbMovieMetadataService(
+            @Qualifier("tmdbRestClientBuilder") RestClient.Builder restClientBuilder,
+            @Value("${tmdb.api-key:}") String apiKey,
+            @Value("${tmdb.access-token:}") String accessToken,
+            @Value("${tmdb.base-url:https://api.themoviedb.org/3}") String baseUrl) {
         this.restClient = restClientBuilder.build();
-        this.apiKey = apiKey;
-        this.accessToken = accessToken;
+        this.apiKey = apiKey == null ? "" : apiKey.trim();
+        this.accessToken = accessToken == null ? "" : accessToken.trim();
         this.baseUrl = baseUrl;
-        if (apiKey.isBlank() && accessToken.isBlank()) {
-            LOGGER.warn("TMDB credential is not configured; movie metadata and trailer enrichment is disabled.");
-        }
+    }
+
+    public boolean isConfigured() {
+        return !apiKey.isBlank() || !accessToken.isBlank();
     }
 
     public TmdbMovieMetadata findMetadata(Movie movie) {
-        if ((apiKey.isBlank() && accessToken.isBlank()) || movie.getTitle() == null) {
+        Integer year = movie.getReleaseYear() != null
+                ? movie.getReleaseYear()
+                : movie.getReleaseDate() == null ? null : movie.getReleaseDate().getYear();
+        if (!isConfigured() || movie.getTitle() == null || movie.getTitle().isBlank() || year == null) {
+            return null;
+        }
+        if (Instant.now().isBefore(unavailableUntil.get())) {
             return null;
         }
 
-        String cacheKey = normalizeTitle(movie.getTitle()) + ":" + movie.getReleaseYear();
-        CachedMetadata cached = cache.get(cacheKey);
+        LookupKey key = new LookupKey(movie.getId(), normalizeTitle(movie.getTitle()), year);
+        CachedMetadata cached = cache.get(key);
         if (cached != null && cached.expiresAt().isAfter(Instant.now())) {
-            return cached.metadata() == NO_METADATA ? null : cached.metadata();
+            return cached.metadata();
         }
 
         try {
-            TmdbMovieMetadata metadata = fetchMetadata(movie);
-            cache.put(cacheKey, new CachedMetadata(
-                    metadata == null ? NO_METADATA : metadata,
-                    Instant.now().plus(CACHE_DURATION)));
+            TmdbMovieMetadata metadata = fetchMetadata(movie, year);
+            if (metadata != null) {
+                cache.put(key, new CachedMetadata(metadata, Instant.now().plus(SUCCESS_CACHE_DURATION)));
+            } else {
+                cache.put(key, new CachedMetadata(null, Instant.now().plus(FAILURE_CACHE_DURATION)));
+            }
             return metadata;
         } catch (RestClientException exception) {
-            logRequestFailure(movie.getTitle(), exception);
-            cache.put(cacheKey, new CachedMetadata(NO_METADATA, Instant.now().plus(FAILURE_CACHE_DURATION)));
+            logRequestFailure(movie.getId(), exception);
+            unavailableUntil.set(Instant.now().plus(FAILURE_CACHE_DURATION));
+            cache.put(key, new CachedMetadata(null, Instant.now().plus(FAILURE_CACHE_DURATION)));
             return null;
         }
     }
 
-    private TmdbMovieMetadata fetchMetadata(Movie movie) {
-        JsonNode search = get("/search/movie", movie.getTitle(), movie.getReleaseYear(), null);
+    private TmdbMovieMetadata fetchMetadata(Movie movie, int year) {
+        JsonNode search = get("/search/movie", movie.getTitle(), year, null);
         JsonNode results = search == null ? null : search.path("results");
-        if (results == null || !results.isArray()) {
-            return null;
-        }
-
-        JsonNode match = findMatchingMovie(results, movie);
+        JsonNode match = findMatchingMovie(results, movie.getTitle(), year);
         if (match == null || !match.path("id").canConvertToLong()) {
             return null;
         }
@@ -95,33 +107,28 @@ public class TmdbMovieMetadataService {
         if (details == null || details.isMissingNode()) {
             return null;
         }
-        JsonNode videos;
-        try {
-            videos = get("/movie/" + tmdbMovieId + "/videos", null, null, null);
-        } catch (RestClientException exception) {
-            logRequestFailure(movie.getTitle(), exception);
-            videos = null;
-        }
+        JsonNode videos = get("/movie/" + tmdbMovieId + "/videos", null, null, null);
         return toMetadata(details, videos);
     }
 
     private JsonNode get(String path, String query, Integer year, String appendToResponse) {
-        UriComponentsBuilder uriBuilder = UriComponentsBuilder.fromUriString(baseUrl)
+        UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(baseUrl)
                 .path(path)
                 .queryParam("language", "en-US");
         if (accessToken.isBlank()) {
-            uriBuilder.queryParam("api_key", apiKey);
+            builder.queryParam("api_key", apiKey);
         }
         if (query != null) {
-            uriBuilder.queryParam("query", query);
+            builder.queryParam("query", query);
         }
         if (year != null) {
-            uriBuilder.queryParam("year", year);
+            builder.queryParam("year", year);
         }
         if (appendToResponse != null) {
-            uriBuilder.queryParam("append_to_response", appendToResponse);
+            builder.queryParam("append_to_response", appendToResponse);
         }
-        URI uri = uriBuilder.build().encode().toUri();
+
+        URI uri = builder.build().encode().toUri();
         RestClient.RequestHeadersSpec<?> request = restClient.get().uri(uri);
         if (!accessToken.isBlank()) {
             request.header("Authorization", "Bearer " + accessToken);
@@ -129,44 +136,26 @@ public class TmdbMovieMetadataService {
         return request.retrieve().body(JsonNode.class);
     }
 
-    private void logRequestFailure(String title, RestClientException exception) {
-        if (exception instanceof RestClientResponseException responseException) {
-            LOGGER.warn("TMDB metadata request failed for '{}' with HTTP status {}.",
-                    title, responseException.getStatusCode().value());
-        } else {
-            LOGGER.warn("TMDB metadata request failed for '{}' ({}).",
-                    title, exception.getClass().getSimpleName());
+    private JsonNode findMatchingMovie(JsonNode results, String expectedTitle, int expectedYear) {
+        if (results == null || !results.isArray()) {
+            return null;
         }
-    }
-
-    private JsonNode findMatchingMovie(JsonNode results, Movie movie) {
-        String expectedTitle = normalizeTitle(movie.getTitle());
-        int expectedYear = movie.getReleaseYear() == null ? 0 : movie.getReleaseYear();
         List<JsonNode> matches = new ArrayList<>();
         results.forEach(result -> {
-            String resultTitle = normalizeTitle(result.path("title").asText(""));
-            String releaseDate = result.path("release_date").asText("");
-            int resultYear = releaseDate.length() >= 4 ? parseYear(releaseDate) : 0;
-            if (resultYear == expectedYear && isTitleMatch(expectedTitle, resultTitle)) {
+            String releaseDate = result.path("release_date").asString("");
+            String resultTitle = result.path("title").asString("");
+            if (yearFromDate(releaseDate) == expectedYear
+                    && normalizeTitle(resultTitle).equals(normalizeTitle(expectedTitle))) {
                 matches.add(result);
             }
         });
-        return matches.stream()
-                .sorted(Comparator.comparing(result -> !normalizeTitle(result.path("title").asText(""))
-                        .equals(expectedTitle)))
-                .findFirst()
-                .orElse(null);
+        return matches.stream().findFirst().orElse(null);
     }
 
-    private boolean isTitleMatch(String expectedTitle, String resultTitle) {
-        if (expectedTitle.equals(resultTitle)) {
-            return true;
+    private int yearFromDate(String releaseDate) {
+        if (releaseDate == null || releaseDate.length() < 4) {
+            return 0;
         }
-        return expectedTitle.equals("asilentvoice")
-                && resultTitle.equals("asilentvoicethemovie");
-    }
-
-    private int parseYear(String releaseDate) {
         try {
             return Integer.parseInt(releaseDate.substring(0, 4));
         } catch (NumberFormatException exception) {
@@ -175,36 +164,41 @@ public class TmdbMovieMetadataService {
     }
 
     private String normalizeTitle(String title) {
-        return title.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
+        return Normalizer.normalize(title, Normalizer.Form.NFKD)
+                .replaceAll("\\p{M}", "")
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z0-9]", "");
     }
 
     private TmdbMovieMetadata toMetadata(JsonNode details, JsonNode videos) {
         BigDecimal rating = details.path("vote_count").asInt(0) > 0
-                ? decimal(details.path("vote_average"))
-                : null;
+                && details.path("vote_average").isNumber()
+                ? details.path("vote_average").decimalValue() : null;
         Integer runtime = positiveInteger(details.path("runtime"));
-        String language = languageName(details.path("original_language").asText(""));
+        String language = languageName(details.path("original_language").asString(""));
         List<String> genres = textValues(details.path("genres"), "name");
-        List<String> directors = details.path("credits").path("crew").isArray()
-                ? valuesWhere(details.path("credits").path("crew"), "job", "Director", "name")
-                : List.of();
+        List<String> directors = valuesWhere(details.path("credits").path("crew"), "job", "Director", "name");
         List<MovieResponse.CastMemberResponse> cast = castMembers(details.path("credits").path("cast"));
+        String posterUrl = posterUrl(details.path("poster_path").asString(null));
+        String overview = textOrNull(details.path("overview").asString(null));
         String youtubeId = trailerId(videos == null ? null : videos.path("results"));
         String trailerUrl = youtubeId == null ? null : "https://www.youtube.com/watch?v=" + youtubeId;
 
         if (rating == null && runtime == null && language == null && genres.isEmpty()
-                && directors.isEmpty() && cast.isEmpty() && youtubeId == null) {
+                && directors.isEmpty() && cast.isEmpty() && posterUrl == null
+                && overview == null && youtubeId == null) {
             return null;
         }
-        return new TmdbMovieMetadata(rating, runtime, language, genres, directors, cast, trailerUrl, youtubeId);
+        return new TmdbMovieMetadata(rating, runtime, language, genres, directors, cast,
+                posterUrl, overview, trailerUrl, youtubeId);
     }
 
-    private BigDecimal decimal(JsonNode value) {
-        if (!value.isNumber()) {
+    private String posterUrl(String posterPath) {
+        if (posterPath == null || !POSTER_PATH.matcher(posterPath).matches()
+                || posterPath.contains("..")) {
             return null;
         }
-        BigDecimal number = value.decimalValue();
-        return number.signum() > 0 ? number : null;
+        return IMAGE_BASE_URL + posterPath;
     }
 
     private Integer positiveInteger(JsonNode value) {
@@ -225,8 +219,8 @@ public class TmdbMovieMetadataService {
         }
         List<String> result = new ArrayList<>();
         values.forEach(value -> {
-            String text = value.path(field).asText("").trim();
-            if (!text.isEmpty()) {
+            String text = textOrNull(value.path(field).asString(null));
+            if (text != null && !result.contains(text)) {
                 result.add(text);
             }
         });
@@ -234,11 +228,14 @@ public class TmdbMovieMetadataService {
     }
 
     private List<String> valuesWhere(JsonNode values, String filterField, String filterValue, String valueField) {
+        if (!values.isArray()) {
+            return List.of();
+        }
         List<String> result = new ArrayList<>();
         values.forEach(value -> {
-            if (filterValue.equalsIgnoreCase(value.path(filterField).asText(""))) {
-                String text = value.path(valueField).asText("").trim();
-                if (!text.isEmpty() && !result.contains(text)) {
+            if (filterValue.equalsIgnoreCase(value.path(filterField).asString(""))) {
+                String text = textOrNull(value.path(valueField).asString(null));
+                if (text != null && !result.contains(text)) {
                     result.add(text);
                 }
             }
@@ -252,10 +249,10 @@ public class TmdbMovieMetadataService {
         }
         List<MovieResponse.CastMemberResponse> result = new ArrayList<>();
         for (JsonNode value : values) {
-            String name = value.path("name").asText("").trim();
-            if (!name.isEmpty()) {
-                String character = value.path("character").asText("").trim();
-                result.add(new MovieResponse.CastMemberResponse(name, character.isEmpty() ? null : character));
+            String name = textOrNull(value.path("name").asString(null));
+            if (name != null) {
+                result.add(new MovieResponse.CastMemberResponse(name,
+                        textOrNull(value.path("character").asString(null))));
             }
             if (result.size() == 10) {
                 break;
@@ -265,17 +262,34 @@ public class TmdbMovieMetadataService {
     }
 
     private String trailerId(JsonNode videos) {
-        if (!videos.isArray()) {
+        if (videos == null || !videos.isArray()) {
             return null;
         }
-        return java.util.stream.StreamSupport.stream(videos.spliterator(), false)
-                .filter(video -> "YouTube".equalsIgnoreCase(video.path("site").asText(""))
-                        && "Trailer".equalsIgnoreCase(video.path("type").asText(""))
-                        && YOUTUBE_ID.matcher(video.path("key").asText("")).matches())
+        return StreamSupport.stream(videos.spliterator(), false)
+                .filter(video -> "YouTube".equalsIgnoreCase(video.path("site").asString(""))
+                        && "Trailer".equalsIgnoreCase(video.path("type").asString(""))
+                        && YOUTUBE_ID.matcher(video.path("key").asString("")).matches())
                 .sorted(Comparator.comparing((JsonNode video) -> !video.path("official").asBoolean(false)))
-                .map(video -> video.path("key").asText())
+                .map(video -> video.path("key").asString())
                 .findFirst()
                 .orElse(null);
+    }
+
+    private String textOrNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private void logRequestFailure(Long movieId, RestClientException exception) {
+        if (exception instanceof RestClientResponseException responseException) {
+            LOGGER.warn("TMDB metadata request failed for movie id {} with HTTP status {}.",
+                    movieId, responseException.getStatusCode().value());
+        } else {
+            LOGGER.warn("TMDB metadata request failed for movie id {} ({}).",
+                    movieId, exception.getClass().getSimpleName());
+        }
+    }
+
+    private record LookupKey(Long movieId, String title, int year) {
     }
 
     private record CachedMetadata(TmdbMovieMetadata metadata, Instant expiresAt) {

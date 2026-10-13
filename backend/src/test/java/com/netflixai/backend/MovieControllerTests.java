@@ -58,6 +58,15 @@ class MovieControllerTests {
     }
 
     @Test
+    void trailerEndpointReturnsAResolutionStateForTheRequestedMovie() throws Exception {
+        mockMvc.perform(get("/api/movies/1/trailer"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.movieId").value(1))
+                .andExpect(jsonPath("$.title").isNotEmpty())
+                .andExpect(jsonPath("$.available").exists());
+    }
+
+    @Test
     void curatedCatalogueContainsRequestedFilmsWithoutRatingOrTrailerClaims() throws Exception {
         mockMvc.perform(get("/api/movies/search?query=Parasite"))
                 .andExpect(status().isOk())
@@ -80,7 +89,7 @@ class MovieControllerTests {
     }
 
     @Test
-    void requestedMoviesReturnTheirOwnTmdbPosterUrls() throws Exception {
+    void requestedMoviesReturnTheirOwnExistingPosterUrls() throws Exception {
         Map<String, String> expectedPosters = Map.of(
                 "3 Idiots", "https://image.tmdb.org/t/p/w500/66A9MqXOyVFCssoloscw79z8Tew.jpg",
                 "777 Charlie", "https://image.tmdb.org/t/p/w500/qArPmXH0aWsT3SEtYl8XrU2Oz48.jpg",
@@ -148,6 +157,18 @@ class MovieControllerTests {
     @Test
     void invalidPageSizeReturnsBadRequest() throws Exception {
         mockMvc.perform(get("/api/movies?size=101"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("INVALID_REQUEST"));
+    }
+
+    @Test
+    void omdbEndpointsReportMissingServerConfigurationSafely() throws Exception {
+        mockMvc.perform(get("/api/movies/omdb/search").param("query", "Inception"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.error").value("OMDB_NOT_CONFIGURED"))
+                .andExpect(jsonPath("$.message").value("OMDb search is not configured on the server"));
+
+        mockMvc.perform(get("/api/movies/omdb/not-an-imdb-id"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("INVALID_REQUEST"));
     }

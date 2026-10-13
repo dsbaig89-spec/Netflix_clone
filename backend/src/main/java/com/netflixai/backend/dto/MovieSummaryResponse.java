@@ -17,6 +17,8 @@ public record MovieSummaryResponse(
         String language,
         String country,
         Boolean featured,
-        List<String> genres
+        List<String> genres,
+        String trailerUrl,
+        String youtubeId
 ) {
 }

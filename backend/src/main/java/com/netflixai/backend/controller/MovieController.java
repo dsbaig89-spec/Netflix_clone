@@ -14,10 +14,14 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.netflixai.backend.dto.MovieResponse;
 import com.netflixai.backend.dto.MovieSummaryResponse;
+import com.netflixai.backend.dto.MovieTrailerResponse;
+import com.netflixai.backend.dto.OmdbMovieResponse;
+import com.netflixai.backend.dto.OmdbSearchResponse;
 import com.netflixai.backend.dto.PageResponse;
 import com.netflixai.backend.mapper.MovieMapper;
 import com.netflixai.backend.service.MovieService;
-import com.netflixai.backend.service.TmdbMovieMetadataService;
+import com.netflixai.backend.service.OmdbMovieService;
+import com.netflixai.backend.service.YouTubeTrailerService;
 
 @RestController
 @RequestMapping("/api/movies")
@@ -27,13 +31,16 @@ public class MovieController {
 
     private final MovieService movieService;
     private final MovieMapper movieMapper;
-    private final TmdbMovieMetadataService tmdbMovieMetadataService;
+    private final OmdbMovieService omdbMovieService;
+    private final YouTubeTrailerService youTubeTrailerService;
 
     public MovieController(MovieService movieService, MovieMapper movieMapper,
-                           TmdbMovieMetadataService tmdbMovieMetadataService) {
+                           OmdbMovieService omdbMovieService,
+                           YouTubeTrailerService youTubeTrailerService) {
         this.movieService = movieService;
         this.movieMapper = movieMapper;
-        this.tmdbMovieMetadataService = tmdbMovieMetadataService;
+        this.omdbMovieService = omdbMovieService;
+        this.youTubeTrailerService = youTubeTrailerService;
     }
 
     @GetMapping
@@ -47,7 +54,12 @@ public class MovieController {
     @GetMapping("/{id}")
     public MovieResponse getById(@PathVariable Long id) {
         var movie = movieService.getById(id);
-        return movieMapper.toResponse(movie, tmdbMovieMetadataService.findMetadata(movie));
+        return movieMapper.toResponse(movie);
+    }
+
+    @GetMapping("/{id}/trailer")
+    public MovieTrailerResponse getTrailer(@PathVariable Long id) {
+        return youTubeTrailerService.resolve(id);
     }
 
     @GetMapping("/search")
@@ -57,6 +69,18 @@ public class MovieController {
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(defaultValue = "title,asc") String sort) {
         return toPageResponse(movieService.search(query, pageable(page, size, sort)));
+    }
+
+    @GetMapping("/omdb/search")
+    public OmdbSearchResponse searchOmdb(
+            @RequestParam String query,
+            @RequestParam(defaultValue = "1") int page) {
+        return omdbMovieService.search(query, page);
+    }
+
+    @GetMapping("/omdb/{imdbId}")
+    public OmdbMovieResponse getOmdbDetails(@PathVariable String imdbId) {
+        return omdbMovieService.getByImdbId(imdbId);
     }
 
     @GetMapping("/genre/{genre}")

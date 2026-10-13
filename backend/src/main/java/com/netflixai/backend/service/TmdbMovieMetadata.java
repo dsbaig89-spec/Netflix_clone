@@ -12,6 +12,8 @@ public record TmdbMovieMetadata(
         List<String> genres,
         List<String> directors,
         List<MovieResponse.CastMemberResponse> cast,
+        String posterUrl,
+        String overview,
         String trailerUrl,
         String youtubeId
 ) {

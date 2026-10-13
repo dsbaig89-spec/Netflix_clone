@@ -1,6 +1,6 @@
 import PosterImage from './PosterImage.jsx'
 
-export default function SearchOverlay({ open, query, onQueryChange, onClose, results, loading, error, fallbackMode }) {
+export default function SearchOverlay({ open, query, onQueryChange, onClose, results, loading, error, fallbackMode, notice }) {
   if (!open) {
     return null
   }
@@ -31,6 +31,7 @@ export default function SearchOverlay({ open, query, onQueryChange, onClose, res
         </div>
 
         {fallbackMode ? <p className="search-overlay__notice">Development fallback is in use because the backend is temporarily unavailable.</p> : null}
+        {notice ? <p className="search-overlay__notice" role="status">{notice}</p> : null}
 
         {loading ? <p className="search-overlay__status">Searching…</p> : null}
         {!loading && error ? <p className="search-overlay__status search-overlay__status--error">{error}</p> : null}
@@ -56,7 +57,7 @@ export default function SearchOverlay({ open, query, onQueryChange, onClose, res
                 <PosterImage movie={movie} alt={movie.title} loading="lazy" />
                 <div className="search-result__details">
                   <strong>{movie.title}</strong>
-                  <span>{movie.releaseYear || 'N/A'} • {movie.genres?.slice(0, 2).join(', ') || 'Drama'}</span>
+                  <span>{movie.releaseYear || 'N/A'} • {movie.genres?.slice(0, 2).join(', ') || 'Movie'}</span>
                 </div>
               </button>
             ))}

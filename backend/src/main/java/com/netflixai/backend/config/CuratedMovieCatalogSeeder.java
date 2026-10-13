@@ -17,17 +17,6 @@ import com.netflixai.backend.repository.MovieRepository;
 @Configuration
 public class CuratedMovieCatalogSeeder {
 
-    private static final String TMDB_POSTER_BASE_URL = "https://image.tmdb.org/t/p/w500";
-    private static final Map<String, String> POSTER_URLS = Map.of(
-            "3 Idiots", TMDB_POSTER_BASE_URL + "/66A9MqXOyVFCssoloscw79z8Tew.jpg",
-            "777 Charlie", TMDB_POSTER_BASE_URL + "/qArPmXH0aWsT3SEtYl8XrU2Oz48.jpg",
-            "96", TMDB_POSTER_BASE_URL + "/nrVloCa2hCFOztRF1DZU2jnWIiQ.jpg",
-            "A Silent Voice", TMDB_POSTER_BASE_URL + "/tuFaWiqX0TXoWu7DGNcmX3UW7sT.jpg",
-            "Inception", TMDB_POSTER_BASE_URL + "/oYuLEt3zVCKq57qu2F8dT7NIa6f.jpg",
-            "Interstellar", TMDB_POSTER_BASE_URL + "/gEU2QniE6E77NI6lCU6MxlNBvIx.jpg",
-            "The Dark Knight", TMDB_POSTER_BASE_URL + "/qJ2tW6WMUDux911r6m7haRef0WH.jpg"
-    );
-
     private static final List<CatalogMovie> CATALOG = List.of(
             movie("Inception", 2010, "English", "A thief who steals secrets through shared dreaming is tasked with planting an idea instead.", "Action", "Science Fiction", "Thriller"),
             movie("Interstellar", 2014, "English", "A former pilot joins a mission beyond Earth to search for a future for humanity.", "Adventure", "Drama", "Science Fiction"),
@@ -120,7 +109,7 @@ public class CuratedMovieCatalogSeeder {
             Map<String, Genre> genres = new HashMap<>();
             for (CatalogMovie entry : CATALOG) {
                 Movie existingMovie = movieRepository.findFirstByTitleIgnoreCase(entry.title()).orElse(null);
-                String posterUrl = POSTER_URLS.get(entry.title());
+                String posterUrl = CuratedMoviePosterCatalog.findPosterUrl(entry.title(), entry.year());
                 if (existingMovie != null) {
                     if (posterUrl != null && (existingMovie.getPosterUrl() == null || existingMovie.getPosterUrl().isBlank())) {
                         existingMovie.setPosterUrl(posterUrl);

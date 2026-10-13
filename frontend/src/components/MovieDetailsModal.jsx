@@ -33,7 +33,7 @@ export default function MovieDetailsModal({ movie, allMovies = [], open, trailer
     const controller = new AbortController()
     setLoading(true)
     setDetailsError('')
-    getMovieById(movie.id, { signal: controller.signal })
+    getMovieById(movie.id, { signal: controller.signal, imdbId: movie.omdbImdbId })
       .then((result) => {
         if (result) setDetails(result)
         else setDetailsError('Full details are unavailable. Showing the information we have.')

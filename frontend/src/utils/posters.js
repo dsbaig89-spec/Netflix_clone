@@ -13,5 +13,5 @@ export const getPosterSources = (movie) => {
     ? movie.posterUrl
     : null
 
-  return [...new Set([localPoster, existingPoster, POSTER_PLACEHOLDER].filter(Boolean))]
+  return [...new Set([existingPoster, localPoster, POSTER_PLACEHOLDER].filter(Boolean))]
 }

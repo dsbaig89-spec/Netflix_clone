@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import './auth.css'
 import { AuthLoading, LoginPage, RegisterPage } from './pages/AuthPages.jsx'
@@ -11,9 +11,10 @@ import HomePage from './pages/HomePage.jsx'
 import MoviesPage from './pages/MoviesPage.jsx'
 import TVShowsPage from './pages/TVShowsPage.jsx'
 import MyListPage from './pages/MyListPage.jsx'
-import { fetchCatalog, getMovieById, searchMovies } from './services/movieService.js'
+import { fetchCatalog, getMovieTrailer, searchMovies } from './services/movieService.js'
 import { getCurrentUser, signOut } from './services/authService.js'
 import { getYouTubeVideoId } from './utils/youtube.js'
+import { toggleMovieInList } from './utils/myList.js'
 
 const STORAGE_KEY = 'streamflix-my-list'
 const authRoute = () => window.location.pathname === '/register' ? 'register' : window.location.pathname === '/login' ? 'login' : 'app'
@@ -30,12 +31,16 @@ function App() {
   const [currentView, setCurrentView] = useState('home')
   const [selectedMovie, setSelectedMovie] = useState(null)
   const [trailerMovie, setTrailerMovie] = useState(null)
+  const [trailerLoading, setTrailerLoading] = useState(false)
+  const [trailerError, setTrailerError] = useState('')
+  const trailerRequestId = useRef(0)
   const [profileOpen, setProfileOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState([])
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchError, setSearchError] = useState('')
+  const [searchNotice, setSearchNotice] = useState('')
   const [fallbackMode, setFallbackMode] = useState(false)
   const [catalogError, setCatalogError] = useState('')
   const [myList, setMyList] = useState(() => {
@@ -133,12 +138,14 @@ function App() {
       setSearchQuery('')
       setSearchResults([])
       setSearchError('')
+      setSearchNotice('')
       return
     }
 
     if (!searchQuery.trim()) {
       setSearchResults([])
       setSearchError('')
+      setSearchNotice('')
       return
     }
 
@@ -152,11 +159,13 @@ function App() {
         setSearchResults(payload.results || [])
         setSearchLoading(false)
         setFallbackMode(Boolean(payload.fallback))
+        setSearchNotice(payload.notice || '')
       } catch (error) {
         if (error.name !== 'AbortError') {
           setSearchError(error.message || 'Unable to load search results right now.')
           setSearchResults([])
           setSearchLoading(false)
+          setSearchNotice('')
         }
       }
     }, 350)
@@ -220,25 +229,56 @@ function App() {
   }
 
   const toggleMyList = (movie) => {
-    setMyList((previous) => {
-      const exists = previous.some((item) => item.id === movie.id)
-      return exists ? previous.filter((item) => item.id !== movie.id) : [...previous, movie]
-    })
+    setMyList((previous) => toggleMovieInList(previous, movie))
   }
 
   const playMovie = async (movie) => {
     if (!movie) return
-    let movieWithTrailer = movie
-    if (!movie.detailsLoaded && !getYouTubeVideoId(movie.youtubeId) && !getYouTubeVideoId(movie.trailerUrl) && movie.id) {
-      const details = await getMovieById(movie.id)
-      if (details) movieWithTrailer = details
-    }
-    setSelectedMovie(movieWithTrailer)
-    setTrailerMovie(movieWithTrailer)
+    const videoId = getYouTubeVideoId(movie.youtubeId) || getYouTubeVideoId(movie.trailerUrl)
+    setSelectedMovie(movie)
+    setTrailerError('')
+    setTrailerMovie(movie)
 
-    if (getYouTubeVideoId(movieWithTrailer.youtubeId) || getYouTubeVideoId(movieWithTrailer.trailerUrl)) {
-      setProgressMap((current) => ({ ...current, [movieWithTrailer.id]: 42 }))
+    if (videoId) {
+      setTrailerLoading(false)
+      setProgressMap((current) => ({ ...current, [movie.id]: 42 }))
+      return
     }
+
+    const requestId = ++trailerRequestId.current
+    setTrailerLoading(true)
+    if (!/^\d+$/.test(String(movie.id))) {
+      setTrailerLoading(false)
+      setTrailerMovie({ ...movie, trailerUrl: '', youtubeId: '' })
+      return
+    }
+
+    try {
+      const trailer = await getMovieTrailer(movie.id)
+      if (requestId !== trailerRequestId.current) return
+      const resolvedMovie = {
+        ...movie,
+        trailerUrl: trailer.trailerUrl || '',
+        youtubeId: trailer.youtubeId || '',
+      }
+      setTrailerMovie(resolvedMovie)
+      if (trailer.available) {
+        setProgressMap((current) => ({ ...current, [movie.id]: 42 }))
+      }
+    } catch (error) {
+      if (requestId !== trailerRequestId.current || error.name === 'AbortError') return
+      setTrailerMovie({ ...movie, trailerUrl: '', youtubeId: '' })
+      setTrailerError('Trailer lookup is temporarily unavailable. Please try again later.')
+    } finally {
+      if (requestId === trailerRequestId.current) setTrailerLoading(false)
+    }
+  }
+
+  const closeTrailer = () => {
+    trailerRequestId.current += 1
+    setTrailerLoading(false)
+    setTrailerError('')
+    setTrailerMovie(null)
   }
 
   const renderPage = () => {
@@ -325,6 +365,7 @@ function App() {
         loading={searchLoading}
         error={searchError}
         fallbackMode={fallbackMode}
+        notice={searchNotice}
       />
 
       <MovieDetailsModal
@@ -332,14 +373,20 @@ function App() {
         allMovies={catalog.movies}
         open={Boolean(selectedMovie)}
         trailerOpen={Boolean(trailerMovie)}
-        onClose={() => { setSelectedMovie(null); setTrailerMovie(null) }}
+        onClose={() => { setSelectedMovie(null); closeTrailer() }}
         onPlay={playMovie}
         onToggleMyList={toggleMyList}
         isInMyList={Boolean(selectedMovie && myList.some((item) => item.id === selectedMovie.id))}
         onSelectSimilar={(movie) => setSelectedMovie(movie)}
       />
 
-      <TrailerModal movie={trailerMovie} open={Boolean(trailerMovie)} onClose={() => setTrailerMovie(null)} />
+      <TrailerModal
+        movie={trailerMovie}
+        open={Boolean(trailerMovie)}
+        loading={trailerLoading}
+        error={trailerError}
+        onClose={closeTrailer}
+      />
     </div>
   )
 }
